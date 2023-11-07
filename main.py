@@ -1,12 +1,11 @@
 import numpy as np
 import pandas as pd
+from matplotlib import pyplot as plt
 from sklearn.model_selection import train_test_split
-from sklearn.linear_model import LinearRegression, LogisticRegression
-from sklearn.metrics import mean_squared_error, accuracy_score
+from sklearn.model_selection import cross_val_score
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.svm import SVC
 from bayes_opt import BayesianOptimization
-from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.gaussian_process.kernels import RBF, ConstantKernel as C
-from sklearn.tree import DecisionTreeRegressor
 
 
 def split_data(df, test_size=0.2, random_state=42):
@@ -21,28 +20,6 @@ def separate_features_target(df, target_column):
     return features, target
 
 
-def train_linear_regression(features, target):
-    # Initialize and fit a linear regression model
-    lin_reg = LinearRegression()
-    lin_reg.fit(features, target)
-    return lin_reg
-
-
-def train_logistic_regression(features, target):
-    # Initialize and fit a logistic regression model
-    log_reg = LogisticRegression(max_iter=10000, solver='lbfgs')
-    log_reg.fit(features, target)
-    return log_reg
-
-
-def calculate_rmse(model, features, target):
-    # Make predictions using the model and calculate RMSE
-    predictions = model.predict(features)
-    mse = mean_squared_error(target, predictions)
-    rmse = np.sqrt(mse)
-    return rmse
-
-
 if __name__ == "__main__":
     # Load the dataset
     data_frame = pd.read_csv("winequality-white.csv", sep=";")
@@ -53,77 +30,135 @@ if __name__ == "__main__":
     # Split the dataset into training and testing sets
     train_set, test_set = split_data(data_frame)
 
-    # *************** TRAINING SET *****************************
     # Separate features and target variable in the training set
-    train_wine_features, train_wine_labels = separate_features_target(train_set, target_column="quality")
+    X_train, y_train = separate_features_target(train_set, target_column="quality")
 
-    # Initialize and train a linear regression model
-    lin_reg_model = train_linear_regression(train_wine_features, train_wine_labels)
-
-    # Calculate and display the RMSE for the linear regression model
-    train_linear_rmse = calculate_rmse(lin_reg_model, train_wine_features, train_wine_labels)
-    print(f"Linear Regression RMSE for TRAIN: {train_linear_rmse}")
-
-    # Initialize and train a logistic regression model for classification
-    # log_reg_model = train_logistic_regression(train_wine_features, train_wine_labels)
-
-    # Perform classification on the training set
-    # log_reg_train_predictions = log_reg_model.predict(train_wine_features)
-
-    # Calculate and display the accuracy for the logistic regression model
-    # log_reg_train_accuracy = accuracy_score(train_wine_labels, log_reg_train_predictions)
-    # print(f"Logistic Regression Accuracy for TRAIN: {log_reg_train_accuracy}")
-
-    # *************** TESTING SET ********************************
     # Separate features and target variable in the training set
-    test_wine_features, test_wine_labels = separate_features_target(test_set, target_column="quality")
+    X_test, y_test = separate_features_target(test_set, target_column="quality")
 
-    # Calculate and display the RMSE for the linear regression model
-    test_linear_rmse = calculate_rmse(lin_reg_model, test_wine_features, test_wine_labels)
-    print(f"Linear Regression RMSE for TEST: {test_linear_rmse}")
-
-    # Make predictions using the logistic regression model
-    # log_reg_test_predictions = log_reg_model.predict(test_wine_features)
-
-    # Calculate and display the accuracy for the logistic regression model
-    # log_reg_test_accuracy = accuracy_score(test_wine_labels, log_reg_test_predictions)
-    # print(f"Logistic Regression Accuracy for TEST: {log_reg_test_accuracy}")
-
-    # *************** Bayesian Optimization ******************************
-    def objective_function(C, RBF_length_scale):
-        # kernel = C * RBF(RBF_length_scale)
-        # gp = GaussianProcessRegressor(kernel=kernel)
-        gp = DecisionTreeRegressor(random_state=42)
-        gp.fit(train_wine_features, train_wine_labels)
-        predicts = gp.predict(test_wine_features)
-        return -mean_squared_error(test_wine_labels, predicts)
+    # Define the hyperparameter optimization function
+    def hyperopt_rf(n_estimators, max_depth, min_samples_split, max_features):
+        estimator = RandomForestClassifier(
+            n_estimators=int(n_estimators),
+            max_depth=int(max_depth),
+            min_samples_split=int(min_samples_split),
+            max_features=min(max_features, 0.999),
+            random_state=42
+        )
+        cval = cross_val_score(estimator, X_train, y_train, scoring='accuracy', cv=5)
+        return cval.mean()
 
 
-    # Defining bounds for the hyperparameters
-    pbounds = {
-        'C': (1e-3, 1e3),
-        'RBF_length_scale': (1e-2, 1e2)
-    }
+    def hyperopt_svm(C, gamma):
+        estimator = SVC(C=C, gamma=gamma, random_state=42)
+        cval = cross_val_score(estimator, X_train, y_train, scoring='accuracy', cv=5)
+        return cval.mean()
 
-    optimizer = BayesianOptimization(
-        f=objective_function,
-        pbounds=pbounds,
+
+    def hyperopt_gb(n_estimators, learning_rate, max_depth):
+        estimator = GradientBoostingClassifier(
+            n_estimators=int(n_estimators),
+            learning_rate=learning_rate,
+            max_depth=int(max_depth),
+            random_state=42
+        )
+        cval = cross_val_score(estimator, X_train, y_train, scoring='accuracy', cv=5)
+        return cval.mean()
+
+
+    # Use Bayesian Optimization to set a range for the hyperparameters
+    rf_bo = BayesianOptimization(hyperopt_rf, {
+        'n_estimators': (10, 250),
+        'max_depth': (1, 50),
+        'min_samples_split': (2, 25),
+        'max_features': (0.1, 0.999),
+    })
+
+    svm_bo = BayesianOptimization(hyperopt_svm, {
+        'C': (0.1, 100),
+        'gamma': (0.001, 10.0)
+    })
+    #
+    gb_bo = BayesianOptimization(hyperopt_gb, {
+        'n_estimators': (10, 100),
+        'learning_rate': (0.01, 0.3),
+        'max_depth': (5, 40)
+    })
+
+    # Perform Bayesian optimization for each algorithm
+    rf_bo.maximize(init_points=5, n_iter=10)
+    svm_bo.maximize(init_points=5, n_iter=10)
+    gb_bo.maximize(init_points=5, n_iter=10)
+
+    # Get the best hyperparameters and their corresponding scores
+    best_rf_params = rf_bo.max['params']
+    best_rf_score = rf_bo.max['target']
+
+    best_svm_params = svm_bo.max['params']
+    best_svm_score = svm_bo.max['target']
+
+    best_gb_params = gb_bo.max['params']
+    best_gb_score = gb_bo.max['target']
+
+    # Train models with the best hyperparameters on the entire training dataset
+    best_rf_model = RandomForestClassifier(
+        n_estimators=int(best_rf_params['n_estimators']),
+        max_depth=int(best_rf_params['max_depth']),
+        min_samples_split=int(best_rf_params['min_samples_split']),
+        max_features=min(best_rf_params['max_features'], 0.999),
+        random_state=42
+    )
+    best_svm_model = SVC(
+        C=best_svm_params['C'],
+        gamma=best_svm_params['gamma'],
+        random_state=42
+    )
+    best_gb_model = GradientBoostingClassifier(
+        n_estimators=int(best_gb_params['n_estimators']),
+        learning_rate=best_gb_params['learning_rate'],
+        max_depth=int(best_gb_params['max_depth']),
         random_state=42
     )
 
-    optimizer.maximize(
-        init_points=2,  # Random exploratory steps
-        n_iter=5  # Steps of Bayesian Optimization
-    )
+    best_rf_model.fit(X_train, y_train)
+    best_svm_model.fit(X_train, y_train)
+    best_gb_model.fit(X_train, y_train)
 
-    best_params = optimizer.max['params']
-    # Load the model with optimized parameters
-    optimized_kernel = C(best_params['C']) * RBF(best_params['RBF_length_scale'])
-    # optimized_gp = GaussianProcessRegressor(kernel=optimized_kernel)
-    optimized_gp = DecisionTreeRegressor(random_state=42)
-    optimized_gp.fit(train_wine_features, train_wine_labels)
+    # Evaluate models on the test dataset
+    rf_test_score = best_rf_model.score(X_test, y_test)
+    svm_test_score = best_svm_model.score(X_test, y_test)
+    gb_test_score = best_gb_model.score(X_test, y_test)
 
-    # Making predictions
-    predictions = optimized_gp.predict(test_wine_features)
+    print("Best Random Forest hyperparameters:", best_rf_params)
+    print("Best Random Forest score:", best_rf_score)
+    print("Random Forest Test Score:", rf_test_score)
 
-    print(f"Bayesian Optimization predictions: {predictions}")
+    print("Best SVM hyperparameters:", best_svm_params)
+    print("Best SVM score:", best_svm_score)
+    print("SVM Test Score:", svm_test_score)
+
+    print("Best Gradient Boosting hyperparameters:", best_gb_params)
+    print("Best Gradient Boosting score:", best_gb_score)
+    print("Gradient Boosting Test Score:", gb_test_score)
+
+
+# Create a bar plot to visualize the accuracy results
+    model_names = ["Random Forest", "SVM", "Gradient Boosting"]
+    model_best_scores = [best_rf_score, best_svm_score, best_gb_score]
+    model_test_scores = [rf_test_score, svm_test_score, gb_test_score]
+
+    bar_width = 0.35
+    index = np.arange(len(model_names))
+
+    plt.figure(figsize=(12, 6))
+    bar1 = plt.bar(index, model_best_scores, bar_width, label='Best scores')
+    bar2 = plt.bar(index + bar_width, model_test_scores, bar_width, label='Test Scores)')
+
+    plt.xlabel('Models')
+    plt.ylabel('Scores')
+    plt.title('Best scores and Test scores of Different Models')
+    plt.xticks(index + bar_width / 2, model_names, rotation=45)
+    plt.legend()
+
+    plt.tight_layout()
+    plt.show()
