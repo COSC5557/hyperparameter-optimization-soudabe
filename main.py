@@ -3,7 +3,7 @@ import pandas as pd
 from matplotlib import pyplot as plt
 from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.model_selection import cross_val_score
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier
 from sklearn.svm import SVC
 from bayes_opt import BayesianOptimization
 
@@ -42,23 +42,27 @@ def nested_cv(estimator, param_bounds, data, target, inner_cv, outer_cv, scoring
     return best_params, np.mean(outer_scores)
 
 
+def default_nested_cv(estimator, data, target, cv, scoring):
+    scores = cross_val_score(estimator, data, target, cv=cv, scoring=scoring)
+    return np.mean(scores)
+
+
 if __name__ == "__main__":
     data_frame = pd.read_csv("winequality-white.csv", sep=";")
-
     X, y = separate_features_target(data_frame, target_column="quality")
 
-    # Define outer and inner cross-validation strategies
     outer_cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
     inner_cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
 
     # Random Forest
+    rf_default_score = default_nested_cv(RandomForestClassifier(random_state=42), X, y, outer_cv, 'accuracy')
     rf_params = {
-        'n_estimators': (10, 250),
-        'max_depth': (1, 50),
-        'min_samples_split': (2, 25),
-        'max_features': (0.1, 0.999),
+        'n_estimators': (50, 500),
+        'max_depth': (3, 100),
+        'min_samples_split': (2, 50),
+        'max_features': (0.1, 1.0)
     }
-    best_rf_params, rf_score = nested_cv(
+    best_rf_params, rf_optimized_score = nested_cv(
         RandomForestClassifier(random_state=42),
         rf_params,
         X, y,
@@ -69,45 +73,60 @@ if __name__ == "__main__":
     )
 
     # SVM
+    svm_default_score = default_nested_cv(SVC(random_state=42), X, y, outer_cv, 'accuracy')
     svm_params = {
         'C': (0.1, 100),
         'gamma': (0.001, 10.0)
     }
-    best_svm_params, svm_score = nested_cv(SVC(random_state=42), svm_params, X, y, inner_cv, outer_cv, 'accuracy')
+    best_svm_params, svm_optimized_score = nested_cv(SVC(random_state=42), svm_params, X, y, inner_cv, outer_cv, 'accuracy')
 
-    # Gradient Boosting
-    gb_params = {
-        'n_estimators': (10, 100),
-        'learning_rate': (0.01, 0.3),
-        'max_depth': (5, 40)
+    # AdaBoost
+    ab_default_score = default_nested_cv(AdaBoostClassifier(random_state=42), X, y, outer_cv, 'accuracy')
+
+    ab_params = {
+        'n_estimators': (50, 500),
+        'learning_rate': (0.01, 2)
     }
-    best_gb_params, gb_score = nested_cv(
-        GradientBoostingClassifier(random_state=42),
-        gb_params,
+
+    best_ab_params, ab_optimized_score = nested_cv(
+        AdaBoostClassifier(random_state=42),
+        ab_params,
         X, y,
         inner_cv,
         outer_cv,
         'accuracy',
-        int_params=['n_estimators', 'learning_rate', 'max_depth']
+        int_params=['n_estimators']
     )
 
+    print("Random Forest Default Nested CV Score:", rf_default_score)
     print("Best Random Forest Parameters:", best_rf_params)
-    print("Random Forest Nested CV Score:", rf_score)
+    print("Random Forest Nested CV Score:", rf_optimized_score)
 
+    print("SVM Default Nested CV Score:", svm_default_score)
     print("Best SVM Parameters:", best_svm_params)
-    print("SVM Nested CV Score:", svm_score)
+    print("SVM Nested CV Score:", svm_optimized_score)
 
-    print("Best Gradient Boosting Parameters:", best_gb_params)
-    print("Gradient Boosting Nested CV Score:", gb_score)
+    print("AdaBoost Default Nested CV Score:", ab_default_score)
+    print("Best AdaBoost Parameters:", best_ab_params)
+    print("AdaBoost Nested CV Score:", ab_optimized_score)
 
-    model_names = ["Random Forest", "SVM", "Gradient Boosting"]
-    model_scores = [rf_score, svm_score, gb_score]
+    # Plotting
+    model_names = ["Random Forest", "SVM", "AdaBoost"]
+    default_scores = [rf_default_score, svm_default_score, ab_default_score]
+    optimized_scores = [rf_optimized_score, svm_optimized_score, ab_optimized_score]
+
+    bar_width = 0.35
+    index = np.arange(len(model_names))
 
     plt.figure(figsize=(12, 6))
-    plt.bar(model_names, model_scores, color=['blue', 'green', 'red'])
+    bar1 = plt.bar(index, default_scores, bar_width, label='Default Parameters', color='b')
+    bar2 = plt.bar(index + bar_width, optimized_scores, bar_width, label='Optimized Parameters', color='g')
+
     plt.xlabel('Models')
     plt.ylabel('Nested CV Scores')
-    plt.title('Nested Cross-Validation Scores of Different Models')
-    plt.xticks(model_names, rotation=45)
+    plt.title('Comparison of Default and Optimized Nested CV Scores')
+    plt.xticks(index + bar_width / 2, model_names)
+    plt.legend()
+
     plt.tight_layout()
     plt.show()
